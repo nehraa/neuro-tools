@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""
+Simple neuro-sync: update MODULE.yaml dependency commit fields from remote tags.
+"""
+import subprocess
+import sys
+import yaml
+
+if __name__ == '__main__':
+    print('neuro-sync placeholder')
