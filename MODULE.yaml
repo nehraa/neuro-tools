@@ -1,5 +1,18 @@
 module:
-  name: "neuro-tools"
+  name: "neuro_tools"
   version: "0.1.0"
+  
+  components:
+    build: []
+    testing: ["quickcheck", "libfuzzer"]
+    debugging: ["gdb", "perf", "ebpf"]
+    ci: ["github-actions", "gitlab-ci"]
+    scripts: []
+  
+  external_tools:
+    - bazel: "6.0"
+    - nix: "2.18"
+    - docker: "24.0"
+    - qemu: "8.0"
 
 dependencies: []
