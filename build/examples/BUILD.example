@@ -1,0 +1,83 @@
+# Example BUILD file for Neuro-OS Bazel builds
+#
+# This demonstrates how to use the custom Bazel rules for
+# Rust, Zig, and Cap'n Proto in a Neuro-OS project.
+
+# Load custom build rules
+load("//build/bazel:rust_rules.bzl", "rust_binary", "rust_library", "rust_test")
+load("//build/bazel:zig_rules.bzl", "zig_binary", "zig_library")
+load("//build/bazel:capnproto_rules.bzl", "capnp_cc_library", "capnp_rust_library")
+
+# Example: Rust library
+rust_library(
+    name = "neuro_lib",
+    srcs = [
+        "src/lib.rs",
+        "src/types.rs",
+        "src/utils.rs",
+    ],
+    edition = "2021",
+    visibility = ["//visibility:public"],
+)
+
+# Example: Rust binary
+rust_binary(
+    name = "neuro_app",
+    srcs = ["src/main.rs"],
+    deps = [":neuro_lib"],
+    edition = "2021",
+    opt_level = "2",
+    lto = True,
+)
+
+# Example: Rust tests
+rust_test(
+    name = "neuro_lib_test",
+    srcs = [
+        "src/lib.rs",
+        "tests/lib_test.rs",
+    ],
+    deps = [":neuro_lib"],
+    edition = "2021",
+)
+
+# Example: Zig library
+zig_library(
+    name = "zig_utils",
+    main = "src/utils.zig",
+    srcs = glob(["src/**/*.zig"]),
+    optimize = "ReleaseSafe",
+    linkage = "static",
+)
+
+# Example: Zig binary
+zig_binary(
+    name = "zig_tool",
+    main = "src/tool.zig",
+    deps = [":zig_utils"],
+    optimize = "ReleaseFast",
+    link_libc = True,
+)
+
+# Example: Cap'n Proto schema
+capnp_cc_library(
+    name = "protocol_cc",
+    srcs = ["protocol.capnp"],
+)
+
+capnp_rust_library(
+    name = "protocol_rust",
+    srcs = ["protocol.capnp"],
+)
+
+# Example: Cross-language integration
+# Rust binary using Cap'n Proto
+rust_binary(
+    name = "ipc_client",
+    srcs = ["src/ipc_client.rs"],
+    deps = [
+        ":neuro_lib",
+        ":protocol_rust",
+    ],
+    edition = "2021",
+)
