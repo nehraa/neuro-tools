@@ -1,0 +1,63 @@
+# Fuzzing Configuration for Neuro-OS
+#
+# This Cargo.toml configures the fuzzing targets for use with cargo-fuzz.
+# 
+# To run fuzzing:
+#   1. Install cargo-fuzz: cargo install cargo-fuzz
+#   2. Build fuzz targets: cargo fuzz build
+#   3. Run a fuzz target: cargo fuzz run <target_name>
+#
+# Example:
+#   cargo fuzz run fuzz_syscall
+
+[package]
+name = "neuro-fuzz"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+# Link to the actual Neuro-OS components being fuzzed
+# These would be the actual kernel modules in a real setup
+[dependencies.neuro-kernel]
+path = "../../../neuro-kernel"
+optional = true
+
+[lib]
+name = "neuro_fuzz"
+path = "lib.rs"
+
+# Fuzzing targets
+[[bin]]
+name = "fuzz_syscall"
+path = "fuzz_targets/fuzz_syscall.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_allocator"
+path = "fuzz_targets/fuzz_allocator.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_ipc"
+path = "fuzz_targets/fuzz_ipc.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_path"
+path = "fuzz_targets/fuzz_path.rs"
+test = false
+doc = false
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+
+# Fuzzing artifacts
+[package.metadata]
+cargo-fuzz = true
