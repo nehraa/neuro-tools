@@ -1,0 +1,402 @@
+# Neuro-OS Build and Test Workflow
+#
+# This comprehensive CI workflow handles:
+# - Multi-platform builds (x86-64, ARM64, RISC-V)
+# - Unit and integration testing
+# - Performance regression detection
+# - Security scanning
+# - Code quality checks
+# - Documentation generation
+#
+# Triggered on: push, pull_request, scheduled runs
+
+name: Build and Test
+
+on:
+  push:
+    branches: [ main, develop, 'release/**' ]
+  pull_request:
+    branches: [ main, develop ]
+  schedule:
+    # Run nightly builds at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  BAZEL_VERSION: 6.0.0
+
+jobs:
+  # ===========================================================================
+  # CODE QUALITY AND LINTING
+  # ===========================================================================
+  
+  lint:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          components: rustfmt, clippy
+      
+      - name: Install Python linters
+        run: |
+          pip install flake8 black mypy pylint
+      
+      - name: Check Python formatting (Black)
+        run: |
+          black --check scripts/ debugging/
+      
+      - name: Python linting (Flake8)
+        run: |
+          flake8 scripts/ debugging/ --max-line-length=100
+      
+      - name: Python type checking (MyPy)
+        run: |
+          mypy scripts/ debugging/ || true  # Non-blocking for now
+      
+      - name: Check Rust formatting
+        run: |
+          cargo fmt --all -- --check
+        working-directory: testing/
+      
+      - name: Rust linting (Clippy)
+        run: |
+          cargo clippy --all-targets --all-features -- -D warnings
+        working-directory: testing/
+
+  # ===========================================================================
+  # BUILD MATRIX - MULTI-PLATFORM
+  # ===========================================================================
+  
+  build:
+    name: Build (${{ matrix.platform }}, ${{ matrix.build_type }})
+    runs-on: ${{ matrix.os }}
+    needs: lint
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86-64 builds
+          - platform: x86-64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            build_type: debug
+          
+          - platform: x86-64
+            os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            build_type: release
+          
+          # ARM64 builds
+          - platform: arm64
+            os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            build_type: release
+          
+          # RISC-V builds (cross-compilation)
+          - platform: riscv64
+            os: ubuntu-latest
+            target: riscv64gc-unknown-linux-gnu
+            build_type: release
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libssl-dev \
+            pkg-config \
+            qemu-system-x86 \
+            qemu-system-arm \
+            qemu-system-misc
+      
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          target: ${{ matrix.target }}
+          override: true
+      
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache Cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+      
+      - name: Build Rust components
+        run: |
+          if [ "${{ matrix.build_type }}" == "release" ]; then
+            cargo build --release --target ${{ matrix.target }}
+          else
+            cargo build --target ${{ matrix.target }}
+          fi
+        working-directory: testing/
+      
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.platform }}-${{ matrix.build_type }}
+          path: |
+            target/${{ matrix.target }}/${{ matrix.build_type }}/
+          retention-days: 7
+
+  # ===========================================================================
+  # TESTING - UNIT AND INTEGRATION
+  # ===========================================================================
+  
+  test:
+    name: Test (${{ matrix.test_type }})
+    runs-on: ubuntu-latest
+    needs: build
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        test_type: [unit, integration, property]
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      
+      - name: Install test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86
+      
+      - name: Run unit tests
+        if: matrix.test_type == 'unit'
+        run: |
+          cargo test --lib
+        working-directory: testing/
+      
+      - name: Run integration tests
+        if: matrix.test_type == 'integration'
+        run: |
+          cargo test --test '*'
+        working-directory: testing/
+      
+      - name: Run property-based tests
+        if: matrix.test_type == 'property'
+        run: |
+          cargo test --tests property_tests
+        working-directory: testing/
+      
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.test_type }}
+          path: target/test-results/
+          retention-days: 30
+
+  # ===========================================================================
+  # FUZZING
+  # ===========================================================================
+  
+  fuzz:
+    name: Fuzzing
+    runs-on: ubuntu-latest
+    needs: build
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: nightly
+          override: true
+      
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+      
+      - name: Run fuzz targets (limited time)
+        run: |
+          # Run each fuzz target for 60 seconds
+          timeout 60 cargo fuzz run fuzz_syscall -- -max_total_time=60 || true
+          timeout 60 cargo fuzz run fuzz_allocator -- -max_total_time=60 || true
+          timeout 60 cargo fuzz run fuzz_ipc -- -max_total_time=60 || true
+        working-directory: testing/fuzzing/
+      
+      - name: Upload fuzzing artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: testing/fuzzing/fuzz/artifacts/
+
+  # ===========================================================================
+  # SECURITY SCANNING
+  # ===========================================================================
+  
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Run cargo audit
+        uses: actions-rs/audit-check@v1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Run cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v1
+      
+      - name: Scan for secrets
+        uses: trufflesecurity/trufflehog@main
+        with:
+          extra_args: --only-verified
+
+  # ===========================================================================
+  # PERFORMANCE BENCHMARKS
+  # ===========================================================================
+  
+  benchmark:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+      
+      - name: Run benchmarks
+        run: |
+          cargo bench --no-fail-fast
+        working-directory: testing/
+      
+      - name: Download previous benchmark data
+        uses: actions/cache@v4
+        with:
+          path: ./cache
+          key: ${{ runner.os }}-benchmark
+      
+      - name: Store benchmark results
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: 'cargo'
+          output-file-path: target/criterion/output.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+      
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: target/criterion/
+
+  # ===========================================================================
+  # DOCUMENTATION GENERATION
+  # ===========================================================================
+  
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+      
+      - name: Generate Rust docs
+        run: |
+          cargo doc --no-deps --all-features
+        working-directory: testing/
+      
+      - name: Deploy to GitHub Pages
+        if: github.ref == 'refs/heads/main'
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./target/doc
+
+  # ===========================================================================
+  # CODE COVERAGE
+  # ===========================================================================
+  
+  coverage:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+      
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin
+      
+      - name: Generate coverage
+        run: |
+          cargo tarpaulin --out Xml --output-dir ./coverage
+        working-directory: testing/
+      
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./testing/coverage/cobertura.xml
+          fail_ci_if_error: false

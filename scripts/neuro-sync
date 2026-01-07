@@ -1,10 +1,399 @@
 #!/usr/bin/env python3
 """
-Simple neuro-sync: update MODULE.yaml dependency commit fields from remote tags.
+Neuro-Sync: Dependency Synchronizer for Neuro-OS
+
+This utility synchronizes MODULE.yaml dependencies across repositories.
+It fetches the latest commit hashes for specified version tags and updates
+the dependency configuration accordingly.
+
+Features:
+- Automatic commit hash resolution from git tags
+- Support for multiple repositories
+- Bulk update mode for all repos
+- Validation of dependency versions
+- Backup of original MODULE.yaml before updates
+
+Usage:
+    neuro-sync <repo_path>              # Update single repo
+    neuro-sync --all                    # Update all known repos
+    neuro-sync --validate <repo_path>   # Validate dependencies
+    neuro-sync --restore <repo_path>    # Restore from backup
+
+Example:
+    neuro-sync /path/to/neuro-kernel
+    neuro-sync --all
 """
+
+import argparse
 import subprocess
 import sys
 import yaml
+from pathlib import Path
+from typing import Dict, List, Optional
+import shutil
+from datetime import datetime
 
-if __name__ == '__main__':
-    print('neuro-sync placeholder')
+
+class NeuroSync:
+    """
+    Main synchronization class for managing Neuro-OS dependencies.
+    
+    This class handles:
+    - Reading and parsing MODULE.yaml files
+    - Resolving git tags to commit hashes
+    - Updating dependency configurations
+    - Backing up and restoring configuration files
+    """
+    
+    # Known Neuro-OS repositories
+    KNOWN_REPOS = [
+        "neuro-kernel",
+        "neuro-services",
+        "neuro-compat",
+        "neuro-ai",
+        "neuro-tools",
+    ]
+    
+    # GitHub organization
+    GITHUB_ORG = "nehraa"
+    
+    def __init__(self, verbose: bool = False):
+        """
+        Initialize the synchronizer.
+        
+        Args:
+            verbose: Enable verbose output
+        """
+        self.verbose = verbose
+    
+    def log(self, message: str, level: str = "INFO") -> None:
+        """Print log message if verbose mode is enabled."""
+        if self.verbose or level == "ERROR":
+            prefix = {
+                "INFO": "[INFO]",
+                "WARN": "[WARN]",
+                "ERROR": "[ERROR]",
+                "SUCCESS": "[✓]",
+            }.get(level, "[INFO]")
+            print(f"{prefix} {message}")
+    
+    def get_commit_for_tag(self, repo: str, tag: str) -> Optional[str]:
+        """
+        Fetch the commit hash for a specific tag from a remote repository.
+        
+        Args:
+            repo: Repository name (e.g., "neuro-kernel")
+            tag: Git tag name (e.g., "v0.1.0")
+        
+        Returns:
+            Commit hash string or None if not found
+        """
+        remote_url = f"git@github.com:{self.GITHUB_ORG}/{repo}.git"
+        
+        try:
+            # Try SSH first
+            result = subprocess.run(
+                ["git", "ls-remote", remote_url, f"refs/tags/{tag}"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            # If SSH fails, try HTTPS
+            if result.returncode != 0:
+                remote_url = f"https://github.com/{self.GITHUB_ORG}/{repo}.git"
+                result = subprocess.run(
+                    ["git", "ls-remote", remote_url, f"refs/tags/{tag}"],
+                    capture_output=True,
+                    text=True,
+                    timeout=10
+                )
+            
+            if result.returncode == 0 and result.stdout.strip():
+                commit_hash = result.stdout.split()[0]
+                self.log(f"Resolved {repo}@{tag} -> {commit_hash[:8]}")
+                return commit_hash
+            else:
+                self.log(f"Tag '{tag}' not found in {repo}", "WARN")
+                return None
+                
+        except subprocess.TimeoutExpired:
+            self.log(f"Timeout fetching {repo}@{tag}", "ERROR")
+            return None
+        except Exception as e:
+            self.log(f"Error fetching {repo}@{tag}: {e}", "ERROR")
+            return None
+    
+    def backup_module_yaml(self, repo_path: Path) -> Optional[Path]:
+        """
+        Create a backup of MODULE.yaml before modification.
+        
+        Args:
+            repo_path: Path to the repository
+        
+        Returns:
+            Path to backup file or None if backup failed
+        """
+        module_file = repo_path / "MODULE.yaml"
+        
+        if not module_file.exists():
+            self.log(f"MODULE.yaml not found in {repo_path}", "ERROR")
+            return None
+        
+        # Create backup with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_file = repo_path / f"MODULE.yaml.backup.{timestamp}"
+        
+        try:
+            shutil.copy2(module_file, backup_file)
+            self.log(f"Backup created: {backup_file}")
+            return backup_file
+        except Exception as e:
+            self.log(f"Failed to create backup: {e}", "ERROR")
+            return None
+    
+    def update_dependencies(self, repo_path: Path) -> bool:
+        """
+        Update dependencies in a repository's MODULE.yaml file.
+        
+        Args:
+            repo_path: Path to the repository
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        repo_path = Path(repo_path).resolve()
+        module_file = repo_path / "MODULE.yaml"
+        
+        if not module_file.exists():
+            self.log(f"MODULE.yaml not found in {repo_path}", "ERROR")
+            return False
+        
+        # Create backup first
+        if not self.backup_module_yaml(repo_path):
+            self.log("Failed to create backup, aborting", "ERROR")
+            return False
+        
+        # Load MODULE.yaml
+        try:
+            with open(module_file) as f:
+                config = yaml.safe_load(f)
+        except Exception as e:
+            self.log(f"Failed to parse MODULE.yaml: {e}", "ERROR")
+            return False
+        
+        # Update dependencies
+        dependencies = config.get("dependencies", [])
+        
+        if not dependencies:
+            self.log("No dependencies found in MODULE.yaml", "WARN")
+            return True
+        
+        updated_count = 0
+        
+        for dep in dependencies:
+            dep_repo = dep.get("repo")
+            dep_version = dep.get("version")
+            
+            if not dep_repo or not dep_version:
+                self.log(f"Invalid dependency entry: {dep}", "WARN")
+                continue
+            
+            self.log(f"Resolving {dep_repo}@{dep_version}...")
+            
+            # Fetch latest commit for tag
+            commit = self.get_commit_for_tag(dep_repo, dep_version)
+            
+            if commit:
+                dep["commit"] = commit
+                updated_count += 1
+                self.log(f"Updated {dep_repo} to commit {commit[:8]}", "SUCCESS")
+            else:
+                self.log(f"Skipping {dep_repo} (could not resolve)", "WARN")
+        
+        # Write updated MODULE.yaml
+        if updated_count > 0:
+            try:
+                with open(module_file, "w") as f:
+                    yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+                
+                self.log(f"Updated {module_file} ({updated_count} dependencies)", "SUCCESS")
+                return True
+            except Exception as e:
+                self.log(f"Failed to write MODULE.yaml: {e}", "ERROR")
+                return False
+        else:
+            self.log("No dependencies were updated", "WARN")
+            return False
+    
+    def validate_dependencies(self, repo_path: Path) -> bool:
+        """
+        Validate that all dependencies have required fields.
+        
+        Args:
+            repo_path: Path to the repository
+        
+        Returns:
+            True if valid, False otherwise
+        """
+        module_file = Path(repo_path) / "MODULE.yaml"
+        
+        if not module_file.exists():
+            self.log(f"MODULE.yaml not found in {repo_path}", "ERROR")
+            return False
+        
+        try:
+            with open(module_file) as f:
+                config = yaml.safe_load(f)
+        except Exception as e:
+            self.log(f"Failed to parse MODULE.yaml: {e}", "ERROR")
+            return False
+        
+        dependencies = config.get("dependencies", [])
+        valid = True
+        
+        for dep in dependencies:
+            repo = dep.get("repo")
+            version = dep.get("version")
+            commit = dep.get("commit")
+            
+            if not repo:
+                self.log("Dependency missing 'repo' field", "ERROR")
+                valid = False
+            
+            if not version:
+                self.log(f"Dependency {repo} missing 'version' field", "ERROR")
+                valid = False
+            
+            if not commit:
+                self.log(f"Dependency {repo} missing 'commit' field", "WARN")
+            
+            self.log(f"✓ {repo}@{version} -> {commit[:8] if commit else 'unresolved'}")
+        
+        return valid
+    
+    def restore_backup(self, repo_path: Path, backup_file: Optional[Path] = None) -> bool:
+        """
+        Restore MODULE.yaml from backup.
+        
+        Args:
+            repo_path: Path to the repository
+            backup_file: Specific backup file to restore (or latest if None)
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        repo_path = Path(repo_path).resolve()
+        module_file = repo_path / "MODULE.yaml"
+        
+        if backup_file is None:
+            # Find latest backup
+            backups = sorted(repo_path.glob("MODULE.yaml.backup.*"), reverse=True)
+            
+            if not backups:
+                self.log("No backup files found", "ERROR")
+                return False
+            
+            backup_file = backups[0]
+        
+        try:
+            shutil.copy2(backup_file, module_file)
+            self.log(f"Restored from {backup_file}", "SUCCESS")
+            return True
+        except Exception as e:
+            self.log(f"Failed to restore: {e}", "ERROR")
+            return False
+
+
+def main():
+    """Main entry point."""
+    parser = argparse.ArgumentParser(
+        description="Synchronize MODULE.yaml dependencies across Neuro-OS repositories",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s /path/to/neuro-kernel
+  %(prog)s --all
+  %(prog)s --validate /path/to/neuro-kernel
+  %(prog)s --restore /path/to/neuro-kernel
+        """
+    )
+    
+    parser.add_argument(
+        "repo",
+        nargs="?",
+        help="Repository path"
+    )
+    
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Update all known repositories (must be in parent directory)"
+    )
+    
+    parser.add_argument(
+        "--validate",
+        metavar="REPO",
+        help="Validate dependencies in repository"
+    )
+    
+    parser.add_argument(
+        "--restore",
+        metavar="REPO",
+        help="Restore MODULE.yaml from backup"
+    )
+    
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable verbose output"
+    )
+    
+    args = parser.parse_args()
+    
+    syncer = NeuroSync(verbose=args.verbose)
+    
+    # Validate mode
+    if args.validate:
+        success = syncer.validate_dependencies(Path(args.validate))
+        sys.exit(0 if success else 1)
+    
+    # Restore mode
+    if args.restore:
+        success = syncer.restore_backup(Path(args.restore))
+        sys.exit(0 if success else 1)
+    
+    # Update all repos mode
+    if args.all:
+        # Assume repos are in parent directory
+        parent_dir = Path.cwd().parent
+        success_count = 0
+        
+        for repo_name in NeuroSync.KNOWN_REPOS:
+            repo_path = parent_dir / repo_name
+            
+            if repo_path.exists():
+                print(f"\n{'='*60}")
+                print(f"Updating {repo_name}...")
+                print('='*60)
+                
+                if syncer.update_dependencies(repo_path):
+                    success_count += 1
+            else:
+                syncer.log(f"Repository not found: {repo_path}", "WARN")
+        
+        print(f"\n✓ Updated {success_count}/{len(NeuroSync.KNOWN_REPOS)} repositories")
+        sys.exit(0)
+    
+    # Single repo mode
+    if args.repo:
+        success = syncer.update_dependencies(Path(args.repo))
+        sys.exit(0 if success else 1)
+    
+    # No arguments - show help
+    parser.print_help()
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
