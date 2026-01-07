@@ -211,9 +211,6 @@ class SyscallTracer:
             size: Size of event data
         """
         # Parse event structure
-        class SyscallEvent(object):
-            pass
-        
         event = self.bpf["events"].event(data)
         
         # Get syscall name

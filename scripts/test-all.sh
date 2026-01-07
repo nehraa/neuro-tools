@@ -103,8 +103,6 @@ run_component_tests() {
     
     echo -e "${BLUE}[TEST]${NC} Testing ${component}..."
     
-    local test_cmd=""
-    local test_count=0
     local component_failed=false
     
     # Determine test command based on component
@@ -115,7 +113,14 @@ run_component_tests() {
             
             # Unit tests
             echo -e "  ${BLUE}→${NC} Running unit tests..."
-            if cargo test --lib ${TEST_FILTER:+--} ${TEST_FILTER}; then
+            local unit_test_result
+            if [[ -n "$TEST_FILTER" ]]; then
+                unit_test_result=$(cargo test --lib -- "$TEST_FILTER" 2>&1)
+            else
+                unit_test_result=$(cargo test --lib 2>&1)
+            fi
+            
+            if [[ $? -eq 0 ]]; then
                 echo -e "  ${GREEN}✓${NC} Unit tests passed"
                 ((PASSED_TESTS++))
             else
@@ -127,7 +132,14 @@ run_component_tests() {
             
             # Integration tests
             echo -e "  ${BLUE}→${NC} Running integration tests..."
-            if cargo test --test '*' ${TEST_FILTER:+--} ${TEST_FILTER}; then
+            local integration_test_result
+            if [[ -n "$TEST_FILTER" ]]; then
+                integration_test_result=$(cargo test --test '*' -- "$TEST_FILTER" 2>&1)
+            else
+                integration_test_result=$(cargo test --test '*' 2>&1)
+            fi
+            
+            if [[ $? -eq 0 ]]; then
                 echo -e "  ${GREEN}✓${NC} Integration tests passed"
                 ((PASSED_TESTS++))
             else
@@ -193,7 +205,14 @@ run_integration_tests() {
     (
         cd "$integration_dir"
         
-        if cargo test --release ${TEST_FILTER:+--} ${TEST_FILTER}; then
+        local test_result
+        if [[ -n "$TEST_FILTER" ]]; then
+            test_result=$(cargo test --release -- "$TEST_FILTER" 2>&1)
+        else
+            test_result=$(cargo test --release 2>&1)
+        fi
+        
+        if [[ $? -eq 0 ]]; then
             echo -e "${GREEN}✓${NC} Integration tests passed"
             ((PASSED_TESTS++))
             return 0
@@ -220,7 +239,14 @@ run_property_tests() {
     (
         cd "${WORKSPACE_DIR}/neuro-tools/testing"
         
-        if cargo test property_tests ${TEST_FILTER:+--} ${TEST_FILTER}; then
+        local test_result
+        if [[ -n "$TEST_FILTER" ]]; then
+            test_result=$(cargo test property_tests -- "$TEST_FILTER" 2>&1)
+        else
+            test_result=$(cargo test property_tests 2>&1)
+        fi
+        
+        if [[ $? -eq 0 ]]; then
             echo -e "${GREEN}✓${NC} Property tests passed"
             ((PASSED_TESTS++))
             return 0

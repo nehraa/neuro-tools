@@ -118,19 +118,17 @@ clone_repo() {
     
     echo -e "${BLUE}[CLONE]${NC} Cloning ${repo}..."
     
-    # Build clone command
-    local clone_cmd="git clone"
+    # Build clone command with properly quoted arguments
+    local clone_args=(git clone)
     
     if [[ "$SHALLOW_CLONE" == "true" ]]; then
-        clone_cmd+=" --depth 1"
+        clone_args+=(--depth 1)
     fi
     
-    clone_cmd+=" --branch ${BRANCH}"
-    clone_cmd+=" ${repo_url}"
-    clone_cmd+=" ${repo_dir}"
+    clone_args+=(--branch "$BRANCH" "$repo_url" "$repo_dir")
     
     # Execute clone
-    if $clone_cmd; then
+    if "${clone_args[@]}"; then
         echo -e "${GREEN}[✓]${NC} Cloned ${repo}"
         return 0
     else

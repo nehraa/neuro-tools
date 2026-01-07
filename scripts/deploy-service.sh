@@ -37,7 +37,7 @@ cargo build --release --bin "$SERVICE_NAME"
 # Stop existing service if requested
 if [[ "$RESTART" == "true" ]]; then
     echo "[STOP] Stopping existing service..."
-    ssh "$TARGET_HOST" "systemctl stop neuro-${SERVICE_NAME}" || true
+    ssh "$TARGET_HOST" "systemctl stop 'neuro-${SERVICE_NAME}'" || true
 fi
 
 # Copy binary
@@ -46,14 +46,14 @@ scp "target/release/${SERVICE_NAME}" "${TARGET_HOST}:${SERVICE_DIR}/"
 
 # Install systemd service
 echo "[INSTALL] Installing systemd service..."
-cat > "/tmp/neuro-${SERVICE_NAME}.service" << EOF
+cat > "/tmp/neuro-${SERVICE_NAME}.service" << 'EOF'
 [Unit]
-Description=Neuro-OS ${SERVICE_NAME} Service
+Description=Neuro-OS SERVICE_NAME_PLACEHOLDER Service
 After=network.target
 
 [Service]
 Type=simple
-ExecStart=${SERVICE_DIR}/${SERVICE_NAME}
+ExecStart=SERVICE_DIR_PLACEHOLDER/SERVICE_NAME_PLACEHOLDER
 Restart=always
 RestartSec=5
 
@@ -61,12 +61,16 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
+# Replace placeholders in the service file
+sed -i "s|SERVICE_NAME_PLACEHOLDER|${SERVICE_NAME}|g" "/tmp/neuro-${SERVICE_NAME}.service"
+sed -i "s|SERVICE_DIR_PLACEHOLDER|${SERVICE_DIR}|g" "/tmp/neuro-${SERVICE_NAME}.service"
+
 scp "/tmp/neuro-${SERVICE_NAME}.service" "${TARGET_HOST}:/etc/systemd/system/"
 rm "/tmp/neuro-${SERVICE_NAME}.service"
 
 # Reload and start service
 echo "[START] Starting service..."
-ssh "$TARGET_HOST" "systemctl daemon-reload && systemctl enable neuro-${SERVICE_NAME} && systemctl start neuro-${SERVICE_NAME}"
+ssh "$TARGET_HOST" "systemctl daemon-reload && systemctl enable 'neuro-${SERVICE_NAME}' && systemctl start 'neuro-${SERVICE_NAME}'"
 
 echo "✓ Service deployed successfully!"
-echo "Check status: ssh $TARGET_HOST systemctl status neuro-${SERVICE_NAME}"
+echo "Check status: ssh $TARGET_HOST systemctl status 'neuro-${SERVICE_NAME}'"

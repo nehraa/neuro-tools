@@ -13,7 +13,6 @@
 
 import gdb
 import struct
-import re
 
 class NeuroTasksCommand(gdb.Command):
     """
@@ -150,7 +149,8 @@ class NeuroMemoryCommand(gdb.Command):
                     
                     if count > 0:
                         print(f"Order {order:2d} ({size_kb:>6} KB): {count:>6} blocks")
-                except:
+                except (gdb.error, ValueError, RuntimeError):
+                    # Some kernels may not expose allocator stats for all orders; skip missing/invalid entries
                     pass
             
         except gdb.error as e:
@@ -249,10 +249,12 @@ class NeuroBacktraceCommand(gdb.Command):
                     if i % 3 == 0:
                         print(f"\n    ", end="")
                     print(f"{reg}=0x{int(val):016x}  ", end="")
-                except:
+                except gdb.error:
+                    # Ignore registers that cannot be read in the current frame
                     pass
             print()
-        except:
+        except gdb.error:
+            # Best-effort register printing: ignore unexpected failures so backtrace still works
             pass
 
 class NeuroPageTableWalk(gdb.Command):
@@ -356,7 +358,8 @@ class NeuroPageTableWalk(gdb.Command):
             inferior = gdb.selected_inferior()
             mem = inferior.read_memory(addr, 8)
             return struct.unpack('<Q', mem)[0]
-        except:
+        except (gdb.error, RuntimeError, struct.error):
+            # Return 0 if memory cannot be read (e.g., invalid address)
             return 0
     
     def _decode_flags(self, entry):
