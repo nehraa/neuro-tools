@@ -64,3 +64,13 @@ Cargo.lock
 # Temporary files
 /tmp/
 *.tmp
+
+# Ignore build artifacts and large images
+*.iso
+*.img
+*.tar.gz
+*.xz
+neuro-initrd.img
+NeuroOS-*.iso
+alpine-minirootfs-*.tar.gz
+
