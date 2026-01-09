@@ -94,7 +94,7 @@ echo "  Executing syscalls..."
 START=$(date +%s%N)
 
 for i in $(seq 1 1000); do
-    getpid > /dev/null
+    sh -c 'echo $$' > /dev/null
 done
 
 END=$(date +%s%N)

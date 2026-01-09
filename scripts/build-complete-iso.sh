@@ -246,11 +246,8 @@ echo "      Initramfs: $(du -h "$BUILD_DIR/iso/boot/initramfs" | cut -f1)"
 cp "$KERNEL" "$BUILD_DIR/iso/boot/neuro-kernel"
 
 echo "[6/6] Creating bootable ISO..."
-# Ensure xorriso is in PATH and use grub-mkrescue
-export PATH="/opt/homebrew/bin:$PATH"
-
 # Use grub-mkrescue - it will handle BIOS and EFI boot
-x86_64-elf-grub-mkrescue -o "$OUTPUT_ISO" "$BUILD_DIR/iso" 2>&1 | grep -vE "(WARNING|xorriso: NOTE)" || {
+grub-mkrescue -o "$OUTPUT_ISO" "$BUILD_DIR/iso" 2>&1 | grep -vE "(WARNING|xorriso: NOTE)" || {
     echo "ERROR: ISO creation failed"
     echo "Trying manual xorriso method..."
     
